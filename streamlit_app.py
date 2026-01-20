@@ -47,10 +47,10 @@ with left:
     if len(st.session_state.df) > 0:
         ticker_to_edit = st.selectbox("Seleccioná ticker a editar", options=st.session_state.df['ticker'].tolist())
         # Obtener el monto actual del ticker seleccionado y usarlo como valor por defecto
-            if ticker_to_edit and ticker_to_edit in st.session_state.df['ticker'].values:
-                default_amount = float(st.session_state.df.loc[st.session_state.df['ticker'] == ticker_to_edit, 'amount_ARS'].iloc[0])
-            else:
-                default_amount = 0.0
+        if ticker_to_edit and ticker_to_edit in st.session_state.df['ticker'].values:
+            default_amount = float(st.session_state.df.loc[st.session_state.df['ticker'] == ticker_to_edit, 'amount_ARS'].iloc[0])
+        else:
+            default_amount = 0.0
         # Usar una key dinámica por ticker para que el campo se pueble según el seleccionado
         input_key = f"edit_amount_input_{ticker_to_edit}"
         new_amount_for_ticker = st.number_input("Nuevo monto (ARS)", min_value=0.0, value=default_amount, step=1000.0, format="%.2f", key=input_key)
