@@ -7,7 +7,7 @@ import io
 
 st.set_page_config(layout="wide", page_title="Dashboard de Cartera - Editable (form)")
 
-st.title("Dashboard de Cartera — Editor por formulario")
+st.title("Dashboard de Cartera")
 
 # -------------------------
 # Helpers
