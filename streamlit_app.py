@@ -44,37 +44,60 @@ if 'editor_key' not in st.session_state:
 left, right = st.columns([1.4, 2])
 
 with left:
-    # Alineado a la izquierda: los controles y la tabla
+    # ---------------------------
+    # Formulario: Editar Monto por ticker (sin selección por defecto)
+    # ---------------------------
     st.subheader("Editar Monto por ticker")
-    if len(st.session_state.df) > 0:
-        ticker_to_edit = st.selectbox(
-            "Seleccioná ticker a editar",
-            options=st.session_state.df['ticker'].tolist(),
-            key=f"select_edit_{st.session_state.editor_key}"
-        )
-        # Obtener el monto actual del ticker seleccionado y usarlo como valor por defecto
-        if ticker_to_edit and ticker_to_edit in st.session_state.df['ticker'].values:
-            default_amount = float(st.session_state.df.loc[st.session_state.df['ticker'] == ticker_to_edit, 'amount_ARS'].iloc[0])
-        else:
-            default_amount = 0.0
-        # Usar una key dinámica por ticker para que el campo se pueble según el seleccionado
-        input_key = f"edit_amount_input_{ticker_to_edit}"
-        new_amount_for_ticker = st.number_input("Nuevo monto (ARS)", min_value=0.0, value=default_amount, step=1000.0, format="%.2f", key=input_key)
-        if st.button("Actualizar monto seleccionado"):
-            base = st.session_state.df.copy()
-            if ticker_to_edit not in base['ticker'].values:
-                st.error("Ticker no encontrado. Refresca la página.")
-            else:
-                base.loc[base['ticker'] == ticker_to_edit, 'amount_ARS'] = float(new_amount_for_ticker)
-                base['ticker'] = base['ticker'].astype(str).str.strip().str.upper()
-                base['amount_ARS'] = pd.to_numeric(base['amount_ARS'], errors='coerce').fillna(0)
-                st.session_state.df = base.reset_index(drop=True)
-                # forzar refresh de widgets dependientes
-                st.session_state.editor_key += 1
-                st.success(f"Ticker {ticker_to_edit} actualizado a {new_amount_for_ticker:,.2f} ARS.")
+    tickers_options = st.session_state.df['ticker'].tolist() if len(st.session_state.df) > 0 else []
+    # Insertar una opción vacía como placeholder (sin selección por defecto)
+    options_for_select = [""] + tickers_options
 
+    # Mostrar selectbox con placeholder
+    ticker_to_edit = st.selectbox(
+        "Seleccioná ticker a editar",
+        options=options_for_select,
+        key=f"select_edit_{st.session_state.editor_key}"
+    )
+
+    # Si no se eligió ticker, no poblamos el number_input con un valor real
+    if ticker_to_edit == "" or ticker_to_edit not in st.session_state.df['ticker'].values:
+        # Campo vacío/por defecto para que el usuario vea que debe seleccionar primero
+        new_amount_for_ticker = st.number_input(
+            "Nuevo monto (ARS)",
+            min_value=0.0,
+            value=0.0,
+            step=1000.0,
+            format="%.2f",
+            key="edit_amount_input_none"
+        )
+        st.info("Seleccioná un ticker para cargar su monto actual.")
     else:
-        st.info("No hay tickers cargados. Agregá uno abajo.")
+        # Si el usuario seleccionó un ticker válido, precargar su monto actual
+        default_amount = float(st.session_state.df.loc[st.session_state.df['ticker'] == ticker_to_edit, 'amount_ARS'].iloc[0])
+        input_key = f"edit_amount_input_{ticker_to_edit}_{st.session_state.editor_key}"
+        new_amount_for_ticker = st.number_input(
+            "Nuevo monto (ARS)",
+            min_value=0.0,
+            value=default_amount,
+            step=1000.0,
+            format="%.2f",
+            key=input_key
+        )
+
+    # Botón para actualizar - solo actúa si se seleccionó un ticker válido
+    if st.button("Actualizar monto seleccionado"):
+        if ticker_to_edit == "" or ticker_to_edit not in st.session_state.df['ticker'].values:
+            st.warning("Primero seleccioná un ticker válido.")
+        else:
+            base = st.session_state.df.copy()
+            base.loc[base['ticker'] == ticker_to_edit, 'amount_ARS'] = float(new_amount_for_ticker)
+            base['ticker'] = base['ticker'].astype(str).str.strip().str.upper()
+            base['amount_ARS'] = pd.to_numeric(base['amount_ARS'], errors='coerce').fillna(0)
+            st.session_state.df = base.reset_index(drop=True)
+            # Forzar refresh de widgets que dependen del df
+            st.session_state.editor_key += 1
+            st.success(f"Ticker {ticker_to_edit} actualizado a {new_amount_for_ticker:,.2f} ARS.")
+
 
     st.markdown("---")
     st.subheader("Agregar nuevo ticker")
