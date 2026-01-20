@@ -14,7 +14,7 @@ st.title("Dashboard de Cartera — Editor interactivo")
 def load_portfolio(path="portfolio_raw.csv"):
     try:
         df = pd.read_csv(path)
-    except Exception as e:
+    except Exception:
         # Si no existe, devolver df vacío con columnas esperadas
         return pd.DataFrame(columns=['ticker','amount_ARS'])
     # Asegurar columnas y tipos
@@ -22,7 +22,7 @@ def load_portfolio(path="portfolio_raw.csv"):
         return pd.DataFrame(columns=['ticker','amount_ARS'])
     df = df[['ticker','amount_ARS']].copy()
     df['amount_ARS'] = pd.to_numeric(df['amount_ARS'], errors='coerce').fillna(0)
-    df['ticker'] = df['ticker'].astype(str).str.strip()
+    df['ticker'] = df['ticker'].astype(str).str.strip().str.upper()
     return df
 
 def df_to_csv_bytes(df):
@@ -34,6 +34,7 @@ def df_to_csv_bytes(df):
 if 'df' not in st.session_state:
     st.session_state.df = load_portfolio()
 
+# Work with a local copy for display / editing
 df = st.session_state.df.copy()
 
 # ---------- Left column: editor / inputs ----------
@@ -41,12 +42,11 @@ left, right = st.columns([1,2])
 
 with left:
     st.subheader("Editar cartera")
-    # Editable table (experimental API compatible)
-    # Use st.data_editor if available, otherwise fallback to experimental_data_editor
+    # Editable table (data_editor). Use dynamically editable rows.
     try:
         edited = st.data_editor(df, num_rows="dynamic", use_container_width=True)
     except Exception:
-        # fallback
+        # fallback for older Streamlit versions
         edited = st.experimental_data_editor(df, num_rows="dynamic", use_container_width=True)
 
     st.markdown("**Agregar nuevo ticker**")
@@ -56,41 +56,50 @@ with left:
     add_col1, add_col2 = st.columns([1,1])
     with add_col1:
         if st.button("Agregar ticker"):
-            if new_ticker.strip() == "" or new_amount <= 0:
+            t = str(new_ticker).strip().upper()
+            a = float(new_amount)
+            if t == "" or a <= 0:
                 st.warning("Ingresá ticker y un monto mayor a 0.")
             else:
-                # evitar duplicados exactos del ticker
-                d = edited.copy()
-                if new_ticker.strip() in d['ticker'].values:
+                # Base actual de trabajo: st.session_state.df (persistente en la sesión)
+                base = st.session_state.df.copy()
+                if t in base['ticker'].values:
                     st.warning("El ticker ya existe. Puedes editar su monto en la tabla.")
                 else:
-                    new_row = {'ticker': new_ticker.strip().upper(), 'amount_ARS': float(new_amount)}
-                    d = pd.concat([d, pd.DataFrame([new_row])], ignore_index=True)
-                    st.session_state.df = d
-                    st.experimental_rerun()
+                    new_row = {'ticker': t, 'amount_ARS': a}
+                    base = pd.concat([base, pd.DataFrame([new_row])], ignore_index=True)
+                    # Normalizar y guardar en session_state (sin forzar rerun)
+                    base['ticker'] = base['ticker'].astype(str).str.strip().str.upper()
+                    base['amount_ARS'] = pd.to_numeric(base['amount_ARS'], errors='coerce').fillna(0)
+                    st.session_state.df = base
+                    st.success(f"Ticker {t} agregado con {a:,.2f} ARS.")
+                    # No llamar a st.experimental_rerun(); la app se re-ejecutará por la interacción
 
     with add_col2:
-        # Eliminar por selección (multi-select)
         st.markdown("**Eliminar tickers**")
-        to_delete = st.multiselect("Seleccioná tickers a eliminar", options=edited['ticker'].tolist())
+        # Eliminar por selección (multi-select)
+        options = st.session_state.df['ticker'].tolist()
+        to_delete = st.multiselect("Seleccioná tickers a eliminar", options=options)
         if st.button("Eliminar seleccionados"):
             if not to_delete:
                 st.warning("No seleccionaste tickers para eliminar.")
             else:
-                d = edited.copy()
-                d = d[~d['ticker'].isin(to_delete)].reset_index(drop=True)
-                st.session_state.df = d
-                st.experimental_rerun()
+                base = st.session_state.df.copy()
+                base = base[~base['ticker'].isin(to_delete)].reset_index(drop=True)
+                st.session_state.df = base
+                st.success(f"Eliminados: {', '.join(to_delete)}")
+                # No llamar a st.experimental_rerun()
 
     # Guardar cambios desde data_editor (botón)
     if st.button("Aplicar cambios de la tabla"):
-        # validar y actualizar
-        cleaned = edited[['ticker','amount_ARS']].copy()
-        cleaned['ticker'] = cleaned['ticker'].astype(str).str.strip().str.upper()
-        cleaned['amount_ARS'] = pd.to_numeric(cleaned['amount_ARS'], errors='coerce').fillna(0)
-        st.session_state.df = cleaned
-        st.success("Cambios aplicados.")
-        st.experimental_rerun()
+        try:
+            cleaned = edited[['ticker','amount_ARS']].copy()
+            cleaned['ticker'] = cleaned['ticker'].astype(str).str.strip().str.upper()
+            cleaned['amount_ARS'] = pd.to_numeric(cleaned['amount_ARS'], errors='coerce').fillna(0)
+            st.session_state.df = cleaned
+            st.success("Cambios aplicados.")
+        except Exception as e:
+            st.error(f"Error al aplicar cambios: {e}")
 
     st.markdown("---")
     st.markdown("**Exportar / Guardar**")
@@ -108,8 +117,8 @@ with right:
     colA.metric("Valor total (ARS)", f"{total_value:,.0f}")
     colB.metric("Nº instrumentos", f"{num_instruments}")
     # Top3 concentration
-    if num_instruments > 0:
-        top3_pct = df_display.sort_values('amount_ARS', ascending=False).head(3)['amount_ARS'].sum() / total_value * 100 if total_value>0 else 0
+    if num_instruments > 0 and total_value > 0:
+        top3_pct = df_display.sort_values('amount_ARS', ascending=False).head(3)['amount_ARS'].sum() / total_value * 100
         colC.metric("Concentración Top 3 (%)", f"{top3_pct:.2f}%")
     else:
         colC.metric("Concentración Top 3 (%)", "N/A")
