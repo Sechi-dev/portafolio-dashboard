@@ -92,6 +92,31 @@ with add_col2:
             # Incrementar editor_key para forzar re-render del widget
             st.session_state.editor_key += 1
             st.success(f"Eliminados: {', '.join(to_delete)}")
+    # ---------------------------
+    # Formulario robusto: editar monto por ticker (soluciona problema de 2da edición)
+    # ---------------------------
+    st.markdown("**Editar monto por ticker (formulario seguro)**")
+    if len(st.session_state.df) > 0:
+        ticker_to_edit = st.selectbox("Seleccioná ticker a editar", options=st.session_state.df['ticker'].tolist())
+        new_amount_for_ticker = st.number_input("Nuevo monto (ARS)", min_value=0.0, value=0.0, step=1000.0, format="%.2f", key="edit_amount_input")
+        if st.button("Actualizar monto seleccionado"):
+            # Actualizar en session_state.df directamente
+            base = st.session_state.df.copy()
+            if ticker_to_edit not in base['ticker'].values:
+                st.error("Ticker no encontrado (posible inconsistencia). Refresca la página.")
+            else:
+                base.loc[base['ticker'] == ticker_to_edit, 'amount_ARS'] = float(new_amount_for_ticker)
+                # Normalizar y guardar
+                base['ticker'] = base['ticker'].astype(str).str.strip().str.upper()
+                base['amount_ARS'] = pd.to_numeric(base['amount_ARS'], errors='coerce').fillna(0)
+                st.session_state.df = base.reset_index(drop=True)
+                # Forzar re-render del data_editor
+                if 'editor_key' not in st.session_state:
+                    st.session_state.editor_key = 0
+                st.session_state.editor_key += 1
+                st.success(f"Ticker {ticker_to_edit} actualizado a {new_amount_for_ticker:,.2f} ARS.")
+    else:
+        st.info("No hay tickers para editar.")
 
 # Guardar cambios desde data_editor (botón)
 if st.button("Aplicar cambios de la tabla"):
