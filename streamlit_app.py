@@ -35,6 +35,8 @@ def df_to_csv_bytes(df):
 # -------------------------
 if 'df' not in st.session_state:
     st.session_state.df = load_portfolio()
+if 'editor_key' not in st.session_state:
+    st.session_state.editor_key = 0
 
 # -------------------------
 # Layout: controles y tabla a la izquierda; KPIs/gráficos a la derecha
@@ -45,7 +47,11 @@ with left:
     # Alineado a la izquierda: los controles y la tabla
     st.subheader("Editar Monto por ticker")
     if len(st.session_state.df) > 0:
-        ticker_to_edit = st.selectbox("Seleccioná ticker a editar", options=st.session_state.df['ticker'].tolist())
+        ticker_to_edit = st.selectbox(
+            "Seleccioná ticker a editar",
+            options=st.session_state.df['ticker'].tolist(),
+            key=f"select_edit_{st.session_state.editor_key}"
+        )
         # Obtener el monto actual del ticker seleccionado y usarlo como valor por defecto
         if ticker_to_edit and ticker_to_edit in st.session_state.df['ticker'].values:
             default_amount = float(st.session_state.df.loc[st.session_state.df['ticker'] == ticker_to_edit, 'amount_ARS'].iloc[0])
@@ -63,6 +69,8 @@ with left:
                 base['ticker'] = base['ticker'].astype(str).str.strip().str.upper()
                 base['amount_ARS'] = pd.to_numeric(base['amount_ARS'], errors='coerce').fillna(0)
                 st.session_state.df = base.reset_index(drop=True)
+                # forzar refresh de widgets dependientes
+                st.session_state.editor_key += 1
                 st.success(f"Ticker {ticker_to_edit} actualizado a {new_amount_for_ticker:,.2f} ARS.")
 
     else:
@@ -87,13 +95,19 @@ with left:
                 base['ticker'] = base['ticker'].astype(str).str.strip().str.upper()
                 base['amount_ARS'] = pd.to_numeric(base['amount_ARS'], errors='coerce').fillna(0)
                 st.session_state.df = base.reset_index(drop=True)
+                # forzar refresh de widgets dependientes
+                st.session_state.editor_key += 1
                 st.success(f"Ticker {t} agregado con {a:,.2f} ARS.")
 
     st.markdown("---")
     st.subheader("Eliminar Tickers")
     if len(st.session_state.df) > 0:
         options = st.session_state.df['ticker'].tolist()
-        to_delete = st.multiselect("Seleccioná tickers a eliminar", options=options)
+        to_delete = st.multiselect(
+            "Seleccioná tickers a eliminar",
+            options=options,
+            key=f"multidel_{st.session_state.editor_key}"
+        )
         if st.button("Eliminar seleccionados"):
             if not to_delete:
                 st.warning("No seleccionaste tickers para eliminar.")
@@ -101,6 +115,8 @@ with left:
                 base = st.session_state.df.copy()
                 base = base[~base['ticker'].isin(to_delete)].reset_index(drop=True)
                 st.session_state.df = base
+                # forzar refresh de widgets dependientes
+                st.session_state.editor_key += 1
                 st.success(f"Eliminados: {', '.join(to_delete)}")
     else:
         st.info("No hay tickers para eliminar.")
