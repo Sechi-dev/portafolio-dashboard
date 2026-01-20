@@ -40,14 +40,18 @@ df = st.session_state.df.copy()
 # ---------- Left column: editor / inputs ----------
 left, right = st.columns([1,2])
 
-with left:
-    st.subheader("Editar cartera")
-    # Editable table (data_editor). Use dynamically editable rows.
+    # ---------------------------
+    # Editor con clave dinámica
+    # ---------------------------
+    # Inicializar key del editor para forzar re-render cuando actualizamos el df
+    if 'editor_key' not in st.session_state:
+        st.session_state.editor_key = 0
+
+    # Mostrar editor con key que depende del contador
     try:
-        edited = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        edited = st.data_editor(st.session_state.df.copy(), num_rows="dynamic", use_container_width=True, key=f"editor_{st.session_state.editor_key}")
     except Exception:
-        # fallback for older Streamlit versions
-        edited = st.experimental_data_editor(df, num_rows="dynamic", use_container_width=True)
+        edited = st.experimental_data_editor(st.session_state.df.copy(), num_rows="dynamic", use_container_width=True, key=f"editor_{st.session_state.editor_key}")
 
     st.markdown("**Agregar nuevo ticker**")
     new_ticker = st.text_input("Ticker (sin sufijo)", value="", placeholder="Ej: ABCD")
@@ -61,23 +65,21 @@ with left:
             if t == "" or a <= 0:
                 st.warning("Ingresá ticker y un monto mayor a 0.")
             else:
-                # Base actual de trabajo: st.session_state.df (persistente en la sesión)
                 base = st.session_state.df.copy()
                 if t in base['ticker'].values:
                     st.warning("El ticker ya existe. Puedes editar su monto en la tabla.")
                 else:
                     new_row = {'ticker': t, 'amount_ARS': a}
                     base = pd.concat([base, pd.DataFrame([new_row])], ignore_index=True)
-                    # Normalizar y guardar en session_state (sin forzar rerun)
                     base['ticker'] = base['ticker'].astype(str).str.strip().str.upper()
                     base['amount_ARS'] = pd.to_numeric(base['amount_ARS'], errors='coerce').fillna(0)
                     st.session_state.df = base
+                    # Incrementar editor_key para forzar re-render del widget
+                    st.session_state.editor_key += 1
                     st.success(f"Ticker {t} agregado con {a:,.2f} ARS.")
-                    # No llamar a st.experimental_rerun(); la app se re-ejecutará por la interacción
 
     with add_col2:
         st.markdown("**Eliminar tickers**")
-        # Eliminar por selección (multi-select)
         options = st.session_state.df['ticker'].tolist()
         to_delete = st.multiselect("Seleccioná tickers a eliminar", options=options)
         if st.button("Eliminar seleccionados"):
@@ -87,8 +89,9 @@ with left:
                 base = st.session_state.df.copy()
                 base = base[~base['ticker'].isin(to_delete)].reset_index(drop=True)
                 st.session_state.df = base
+                # Incrementar editor_key para forzar re-render del widget
+                st.session_state.editor_key += 1
                 st.success(f"Eliminados: {', '.join(to_delete)}")
-                # No llamar a st.experimental_rerun()
 
     # Guardar cambios desde data_editor (botón)
     if st.button("Aplicar cambios de la tabla"):
@@ -97,6 +100,8 @@ with left:
             cleaned['ticker'] = cleaned['ticker'].astype(str).str.strip().str.upper()
             cleaned['amount_ARS'] = pd.to_numeric(cleaned['amount_ARS'], errors='coerce').fillna(0)
             st.session_state.df = cleaned
+            # Increment key to force data_editor widget refresh so further edits work reliably
+            st.session_state.editor_key += 1
             st.success("Cambios aplicados.")
         except Exception as e:
             st.error(f"Error al aplicar cambios: {e}")
