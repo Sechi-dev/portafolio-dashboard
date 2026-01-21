@@ -4,6 +4,11 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import io
+import base64
+import requests
+import os
+import json
+from datetime import datetime
 
 st.set_page_config(layout="wide", page_title="Dashboard de Cartera - Editable (form)")
 
@@ -29,6 +34,77 @@ def df_to_csv_bytes(df):
     buf = io.StringIO()
     df.to_csv(buf, index=False)
     return buf.getvalue().encode('utf-8')
+
+# -------------------------
+# GitHub persistence helpers
+# -------------------------
+def get_github_headers():
+    token = None
+    # Preferir st.secrets (configurá en Streamlit Cloud)
+    try:
+        token = st.secrets["GITHUB_PAT"]
+    except Exception:
+        # Intentar desde variable de entorno (si prefieres esa opción)
+        token = os.getenv("GITHUB_PAT")
+    if not token:
+        return None
+    return {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+
+def get_file_sha(repo, path):
+    """Devuelve el SHA del archivo si existe, o None."""
+    headers = get_github_headers()
+    if not headers:
+        return None
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    r = requests.get(url, headers=headers, timeout=20)
+    if r.status_code == 200:
+        return r.json().get("sha")
+    return None
+
+def commit_csv_to_github(df, repo=None, path=None, message=None, author_name=None, author_email=None):
+    """
+    Crea o actualiza el archivo 'path' en el repo con el CSV generado desde df.
+    Devuelve dict result {ok: bool, status_code: int, message: str}
+    """
+    headers = get_github_headers()
+    if not headers:
+        return {"ok": False, "message": "GITHUB_PAT no configurado en secrets.", "status_code": None}
+
+    repo = repo or st.secrets.get("GITHUB_REPO", None)
+    path = path or st.secrets.get("GITHUB_FILEPATH", "portfolio_raw.csv")
+    if not repo or not path:
+        return {"ok": False, "message": "GITHUB_REPO o GITHUB_FILEPATH no configurados.", "status_code": None}
+
+    csv_bytes = df_to_csv_bytes(df)
+    content_b64 = base64.b64encode(csv_bytes).decode("utf-8")
+    sha = get_file_sha(repo, path)
+
+    commit_message = message or f"Auto-update portfolio_raw.csv - {datetime.utcnow().isoformat()}Z"
+    payload = {
+        "message": commit_message,
+        "content": content_b64,
+    }
+    # Optional author
+    author = {}
+    if author_name := st.secrets.get("GITHUB_COMMIT_NAME", None):
+        author["name"] = author_name
+    if author_email := st.secrets.get("GITHUB_COMMIT_EMAIL", None):
+        author["email"] = author_email
+    if author:
+        payload["committer"] = author
+
+    if sha:
+        payload["sha"] = sha  # update existing file
+
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    try:
+        r = requests.put(url, headers=headers, data=json.dumps(payload), timeout=20)
+        if r.status_code in (200, 201):
+            return {"ok": True, "message": "File committed", "status_code": r.status_code}
+        else:
+            return {"ok": False, "message": f"GitHub API error: {r.status_code} - {r.text}", "status_code": r.status_code}
+    except Exception as e:
+        return {"ok": False, "message": f"Exception: {e}", "status_code": None}
 
 # -------------------------
 # Inicializar session state
@@ -67,6 +143,13 @@ with left:
                 st.session_state.df = base.reset_index(drop=True)
                 # Forzar refresh de widgets dependientes
                 st.session_state.editor_key += 1
+                # Persistir en GitHub (intentar, pero no romper la app si falla)
+                try:
+                    res = commit_csv_to_github(st.session_state.df)
+                    # opcional: guardar resultado en session state para debug
+                    st.session_state.last_commit_result = res
+                except Exception as e:
+                    st.session_state.last_commit_result = {"ok": False, "message": str(e)}
                 st.success(f"Ticker {t} agregado con {a:,.2f} ARS.")
 
     st.markdown("---")
@@ -85,6 +168,11 @@ with left:
                 base = base[~base['ticker'].isin(to_delete)].reset_index(drop=True)
                 st.session_state.df = base
                 st.session_state.editor_key += 1
+                try:
+                    res = commit_csv_to_github(st.session_state.df)
+                    st.session_state.last_commit_result = res
+                except Exception as e:
+                    st.session_state.last_commit_result = {"ok": False, "message": str(e)}
                 st.success(f"Eliminados: {', '.join(to_delete)}")
     else:
         st.info("No hay tickers para eliminar.")
@@ -141,6 +229,11 @@ with left:
             base['amount_ARS'] = pd.to_numeric(base['amount_ARS'], errors='coerce').fillna(0)
             st.session_state.df = base.reset_index(drop=True)
             st.session_state.editor_key += 1
+            try:
+                res = commit_csv_to_github(st.session_state.df)
+                st.session_state.last_commit_result = res
+            except Exception as e:
+                st.session_state.last_commit_result = {"ok": False, "message": str(e)}
             st.session_state.selected_edit_ticker = ""
             st.success(f"Ticker {ticker_to_edit} actualizado a {new_amount_for_ticker:,.2f} ARS.")
 
