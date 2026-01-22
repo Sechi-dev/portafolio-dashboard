@@ -297,7 +297,7 @@ with right:
     st.subheader("Distribución y top holdings")
     if not df_weights.empty:
         # Mostrar tabla con formato
-        display_table = df_weights[['Ticker', 'Monto ($)', '% de composicón']].copy()
+        display_table = df_weights[['ticker', 'amount_ARS', 'weight_pct']].copy()
         display_table['amount_ARS'] = display_table['amount_ARS'].map("{:,.2f}".format)
         display_table['weight_pct'] = display_table['weight_pct'].map("{:.2f}%".format)
         st.dataframe(display_table.reset_index(drop=True), use_container_width=True)
