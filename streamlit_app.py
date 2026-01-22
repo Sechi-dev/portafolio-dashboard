@@ -239,16 +239,6 @@ with left:
             st.success(f"Ticker {ticker_to_edit} actualizado a {new_amount_for_ticker:,.2f} ARS.")
 
     st.markdown("---")
-    # -------------------------
-    # Tabla de Posición (visual)
-    # -------------------------
-    st.subheader("Tabla de Posición")
-    if len(st.session_state.df) == 0:
-        st.info("No hay posiciones cargadas.")
-    else:
-        st.dataframe(st.session_state.df.sort_values('amount_ARS', ascending=False).reset_index(drop=True), use_container_width=True)
-
-    st.markdown("---")
     # Exportar CSV actualizado
     csv_bytes = df_to_csv_bytes(st.session_state.df)
     st.download_button("Descargar portfolio (CSV actualizado)", csv_bytes, file_name="portfolio_raw_updated.csv", mime="text/csv")
@@ -298,7 +288,7 @@ with right:
     st.subheader("Distribución y top holdings")
     if not df_weights.empty:
         # Mostrar tabla con formato
-        display_table = df_weights[['ticker', 'amount_ARS', 'weight_pct']].copy()
+        display_table = df_weights[['Ticker', 'Monto ($)', '% de composicón']].copy()
         display_table['amount_ARS'] = display_table['amount_ARS'].map("{:,.2f}".format)
         display_table['weight_pct'] = display_table['weight_pct'].map("{:.2f}%".format)
         st.dataframe(display_table.reset_index(drop=True), use_container_width=True)
