@@ -179,8 +179,9 @@ with left:
 
     st.markdown("---")
     # -------------------------
-    # SELECTBOX para editar (AHORA está DESPUÉS de agregar/eliminar)
+    # SELECTBOX para editar
     # -------------------------
+    st.subheader("Editar Ticker")
     # Construir opciones en cada render para reflejar cambios inmediatos
     tickers_options = st.session_state.df['ticker'].tolist() if len(st.session_state.df) > 0 else []
     options_for_select = [""] + tickers_options
@@ -253,29 +254,72 @@ with left:
     st.download_button("Descargar portfolio (CSV actualizado)", csv_bytes, file_name="portfolio_raw_updated.csv", mime="text/csv")
 
 with right:
-    # KPIs y gráficos (se actualizan leyendo st.session_state.df)
+    # ---------- Right column: KPIs, métricas de porcentaje y visualizaciones ----------
     st.subheader("KPIs y visualizaciones")
+
+    # Tomar DF actual
     df_display = st.session_state.df.copy()
-    total_value = df_display['amount_ARS'].sum()
-    num_instruments = len(df_display)
+    # Asegurar columnas
+    if df_display.empty:
+        total_value = 0.0
+        num_instruments = 0
+    else:
+        df_display['amount_ARS'] = pd.to_numeric(df_display['amount_ARS'], errors='coerce').fillna(0)
+        total_value = df_display['amount_ARS'].sum()
+        num_instruments = len(df_display)
+
+    # KPI básicos
     colA, colB, colC, colD = st.columns(4)
     colA.metric("Valor total (ARS)", f"{total_value:,.0f}")
     colB.metric("Nº instrumentos", f"{num_instruments}")
-    if num_instruments > 0 and total_value > 0:
-        top3_pct = df_display.sort_values('amount_ARS', ascending=False).head(3)['amount_ARS'].sum() / total_value * 100
+
+    # --- Cálculo de pesos porcentuales ---
+    if total_value > 0 and num_instruments > 0:
+        df_weights = df_display.copy()
+        df_weights['weight_pct'] = (df_weights['amount_ARS'] / total_value) * 100
+        df_weights = df_weights.sort_values('weight_pct', ascending=False).reset_index(drop=True)
+
+        # Top N metrics
+        top1_pct = df_weights['weight_pct'].iloc[0] if len(df_weights) >= 1 else 0.0
+        top3_pct = df_weights['weight_pct'].iloc[:3].sum() if len(df_weights) >= 3 else df_weights['weight_pct'].sum()
+        top5_pct = df_weights['weight_pct'].iloc[:5].sum() if len(df_weights) >= 5 else df_weights['weight_pct'].sum()
+
         colC.metric("Concentración Top 3 (%)", f"{top3_pct:.2f}%")
+        colD.metric("Activo dominante (Top 1 %)", f"{top1_pct:.2f}%")
     else:
+        # vacíos
+        df_weights = pd.DataFrame(columns=['ticker', 'amount_ARS', 'weight_pct'])
         colC.metric("Concentración Top 3 (%)", "N/A")
-    colD.metric("Última actualización", "Snapshot")
+        colD.metric("Activo dominante (Top 1 %)", "N/A")
 
     st.markdown("---")
+
+    # --- Visual: tabla de pesos (izquierda de la columna derecha) ---
+    st.subheader("Distribución y top holdings")
+    if not df_weights.empty:
+        # Mostrar tabla con formato
+        display_table = df_weights[['ticker', 'amount_ARS', 'weight_pct']].copy()
+        display_table['amount_ARS'] = display_table['amount_ARS'].map("{:,.2f}".format)
+        display_table['weight_pct'] = display_table['weight_pct'].map("{:.2f}%".format)
+        st.dataframe(display_table.reset_index(drop=True), use_container_width=True)
+
+        # Resumen top 5 como texto compacto
+        top5_list = df_weights.head(5)[['ticker','weight_pct']].copy()
+        top5_text = ", ".join([f"{row.ticker} ({row.weight_pct:.2f}%)" for row in top5_list.itertuples()])
+        st.markdown(f"**Top 5 (por peso):** {top5_text}")
+    else:
+        st.info("No hay instrumentos para mostrar porcentaje.")
+
+    st.markdown("---")
+
+    # --- Mantener gráficos (pie + bar) actualizados según df_display ---
     if num_instruments == 0:
         st.info("No hay instrumentos para graficar.")
     else:
-        st.subheader("Distribución por ticker")
-        fig_pie = px.pie(df_display, names='ticker', values='amount_ARS', title='Peso por ticker')
+        st.subheader("Distribución por ticker (gráfico)")
+        fig_pie = px.pie(df_weights, names='ticker', values='amount_ARS', title='Peso por ticker')
         st.plotly_chart(fig_pie, use_container_width=True)
 
         st.subheader("Top holdings (monto ARS)")
-        fig_bar = px.bar(df_display.sort_values('amount_ARS', ascending=False), x='ticker', y='amount_ARS', title='Top holdings')
+        fig_bar = px.bar(df_weights.sort_values('amount_ARS', ascending=False), x='ticker', y='amount_ARS', title='Top holdings')
         st.plotly_chart(fig_bar, use_container_width=True)
