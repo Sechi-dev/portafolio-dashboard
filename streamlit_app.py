@@ -154,26 +154,60 @@ with left:
 
     st.markdown("---")
     # -------------------------
-    # Eliminar Tickers
+    # Eliminar Ticker (solo 1): selectbox + modal de confirmación
     # -------------------------
     st.subheader("Eliminar Tickers")
+    # Usamos selectbox para forzar eliminación de a uno
     if len(st.session_state.df) > 0:
-        options = st.session_state.df['ticker'].tolist()
-        to_delete = st.multiselect("Seleccioná tickers a eliminar", options=options, key=f"multidel_{st.session_state.editor_key}")
-        if st.button("Eliminar seleccionados"):
-            if not to_delete:
-                st.warning("No seleccionaste tickers para eliminar.")
+        delete_options = st.session_state.df['ticker'].tolist()
+        ticker_to_delete = st.selectbox(
+            "Seleccioná un ticker para eliminar (solo 1)",
+            options=[""] + delete_options,
+            index=0,
+            key=f"select_delete_{st.session_state.editor_key}"
+        )
+
+        # Botón para abrir modal de confirmación (solo si hay uno seleccionado)
+        if st.button("Eliminar seleccionado"):
+            if ticker_to_delete == "" or ticker_to_delete not in st.session_state.df['ticker'].values:
+                st.warning("Primero seleccioná un ticker válido para eliminar.")
             else:
-                base = st.session_state.df.copy()
-                base = base[~base['ticker'].isin(to_delete)].reset_index(drop=True)
-                st.session_state.df = base
-                st.session_state.editor_key += 1
-                try:
-                    res = commit_csv_to_github(st.session_state.df)
-                    st.session_state.last_commit_result = res
-                except Exception as e:
-                    st.session_state.last_commit_result = {"ok": False, "message": str(e)}
-                st.success(f"Eliminados: {', '.join(to_delete)}")
+                # Marcar en session_state que queremos confirmar eliminación
+                st.session_state.show_delete_modal = True
+                st.session_state.delete_candidate = ticker_to_delete
+
+        # Si la flag está activa, mostramos el modal de confirmación
+        if st.session_state.get("show_delete_modal", False):
+            # Modal con mensaje y dos botones: Confirmar / Cancelar
+            with st.modal("Confirmar eliminación"):
+                candidate = st.session_state.get("delete_candidate", "")
+                st.markdown(f"**Estás por eliminar el ticker `{candidate}`.**")
+                st.write("Esta acción eliminará la posición del portfolio. ¿Confirmás?")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("Confirmar", key=f"confirm_delete_{st.session_state.editor_key}"):
+                        # Ejecutar eliminación
+                        base = st.session_state.df.copy()
+                        base = base[base['ticker'] != candidate].reset_index(drop=True)
+                        st.session_state.df = base
+                        # Forzar refresh de widgets dependientes
+                        st.session_state.editor_key += 1
+                        # limpiar flags
+                        st.session_state.show_delete_modal = False
+                        st.session_state.delete_candidate = ""
+                        # Intentar persistir en GitHub si la función existe
+                        try:
+                            res = commit_csv_to_github(st.session_state.df)
+                            st.session_state.last_commit_result = res
+                        except Exception as e:
+                            st.session_state.last_commit_result = {"ok": False, "message": str(e)}
+                        st.success(f"Ticker {candidate} eliminado.")
+                with c2:
+                    if st.button("Cancelar", key=f"cancel_delete_{st.session_state.editor_key}"):
+                        # Cerrar modal sin cambios
+                        st.session_state.show_delete_modal = False
+                        st.session_state.delete_candidate = ""
+                        st.info("Eliminación cancelada.")
     else:
         st.info("No hay tickers para eliminar.")
 
