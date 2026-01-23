@@ -290,6 +290,39 @@ with right:
         df_weights = pd.DataFrame(columns=['ticker', 'amount_ARS', 'weight_pct'])
         colC.metric("Concentración Top 3 (%)", "N/A")
         colD.metric("Activo dominante (Top 1 %)", "N/A")
+    
+    # -------------------------
+    # Cálculo HHI (Herfindahl–Hirschman Index)
+    # -------------------------
+    # df_weights ya tiene column 'weight_pct' en porcentaje (suma 100)
+    # Convertir a fracciones (0..1)
+    if not df_weights.empty:
+        df_weights['weight_frac'] = df_weights['weight_pct'] / 100.0
+        hhi_fraction = (df_weights['weight_frac'] ** 2).sum()  # rango 0..1
+        hhi_10000 = hhi_fraction * 10000.0  # escala 0..10000 (usada comúnmente)
+    else:
+        hhi_fraction = 0.0
+        hhi_10000 = 0.0
+
+    # Interpretación por umbrales
+    if hhi_10000 < 1000:
+        hhi_label = "Diversificada (baja concentración)"
+    elif hhi_10000 < 1800:
+        hhi_label = "Moderada concentración"
+    else:
+        hhi_label = "Alta concentración"
+
+    # Mostrar HHI como KPI adicional (añadimos una fila de métricas compacta)
+    try:
+        # Si ya existen 4 columnas arriba, creamos otra fila de columnas para no desordenar
+        colE, colF = st.columns([1,1])
+        colE.metric("HHI (0–1)", f"{hhi_fraction:.4f}")
+        colF.metric("HHI (0–10000)", f"{hhi_10000:.0f}")
+    except Exception:
+        # Fallback simple
+        st.write(f"HHI: {hhi_fraction:.4f} (0–1) — {hhi_10000:.0f} (0–10000)")
+
+    st.markdown(f"**Interpretación HHI:** {hhi_label}")
 
     st.markdown("---")
 
