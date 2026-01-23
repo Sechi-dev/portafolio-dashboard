@@ -237,15 +237,15 @@ with left:
                 st.session_state.last_commit_result = {"ok": False, "message": str(e)}
             st.session_state.selected_edit_ticker = ""
             st.success(f"Ticker {ticker_to_edit} actualizado a {new_amount_for_ticker:,.2f} ARS.")
-    st.markdown("---")
+    # st.markdown("---")
     # -------------------------
     # Tabla de Posición (visual)
     # -------------------------
-    st.subheader("Tabla de Posición")
-    if len(st.session_state.df) == 0:
-        st.info("No hay posiciones cargadas.")
-    else:
-        st.dataframe(st.session_state.df.sort_values('amount_ARS', ascending=False).reset_index(drop=True), use_container_width=True)
+    # st.subheader("Tabla de Posición")
+    # if len(st.session_state.df) == 0:
+    #     st.info("No hay posiciones cargadas.")
+    # else:
+    #     st.dataframe(st.session_state.df.sort_values('amount_ARS', ascending=False).reset_index(drop=True), use_container_width=True)
     
     st.markdown("---")
     # Exportar CSV actualizado
