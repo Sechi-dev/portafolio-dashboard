@@ -154,24 +154,28 @@ with left:
 
     st.markdown("---")
     # -------------------------
-    # Eliminar Ticker (solo 1) con confirmación explícita (SIN st.modal)
+    # Eliminar Ticker (solo 1) con confirmación explícita (fix: limpia selectbox inmediatamente)
     # -------------------------
     st.subheader("Eliminar Tickers")
 
-    # Inicializar flags
+    # Inicializar flags / estado
     if "show_delete_confirm" not in st.session_state:
         st.session_state.show_delete_confirm = False
     if "delete_candidate" not in st.session_state:
         st.session_state.delete_candidate = ""
+    # Inicializar key fija para el selectbox
+    if "select_delete" not in st.session_state:
+        st.session_state.select_delete = ""
 
     if len(st.session_state.df) > 0:
         delete_options = st.session_state.df['ticker'].tolist()
 
+        # selectbox con key fija
         ticker_to_delete = st.selectbox(
             "Seleccioná un ticker para eliminar (solo 1)",
             options=[""] + delete_options,
             index=0,
-            key=f"select_delete_{st.session_state.editor_key}"
+            key="select_delete"
         )
 
         if st.button("Eliminar seleccionado"):
@@ -200,6 +204,9 @@ with left:
                     st.session_state.show_delete_confirm = False
                     st.session_state.delete_candidate = ""
 
+                    # LIMPIAR selectbox inmediatamente para que no quede seleccionado
+                    st.session_state.select_delete = ""
+
                     # persistencia en GitHub (si está configurada)
                     try:
                         res = commit_csv_to_github(st.session_state.df)
@@ -213,8 +220,9 @@ with left:
                 if st.button("Cancelar"):
                     st.session_state.show_delete_confirm = False
                     st.session_state.delete_candidate = ""
+                    # LIMPIAR selectbox para que vuelva a estado vacío
+                    st.session_state.select_delete = ""
                     st.info("Eliminación cancelada.")
-
     else:
         st.info("No hay tickers para eliminar.")
 
