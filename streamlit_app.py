@@ -154,7 +154,7 @@ with left:
 
     st.markdown("---")
     # -------------------------
-    # Eliminar Ticker (solo 1) con confirmación explícita (fix: limpia selectbox inmediatamente)
+    # Eliminar Ticker (solo 1) con confirmación explícita (fix final)
     # -------------------------
     st.subheader("Eliminar Tickers")
 
@@ -163,19 +163,17 @@ with left:
         st.session_state.show_delete_confirm = False
     if "delete_candidate" not in st.session_state:
         st.session_state.delete_candidate = ""
-    # Inicializar key fija para el selectbox
-    if "select_delete" not in st.session_state:
-        st.session_state.select_delete = ""
 
     if len(st.session_state.df) > 0:
         delete_options = st.session_state.df['ticker'].tolist()
 
-        # selectbox con key fija
+        # selectbox con key dinámica basada en editor_key (permite "reset" en la siguiente ejecución)
+        select_key = f"select_delete_{st.session_state.editor_key}"
         ticker_to_delete = st.selectbox(
             "Seleccioná un ticker para eliminar (solo 1)",
             options=[""] + delete_options,
             index=0,
-            key="select_delete"
+            key=select_key
         )
 
         if st.button("Eliminar seleccionado"):
@@ -199,13 +197,11 @@ with left:
                     base = base[base['ticker'] != candidate].reset_index(drop=True)
                     st.session_state.df = base
 
-                    # refrescar estado
+                    # refrescar estado: incrementamos editor_key para forzar que el selectbox
+                    # sea recreado con una key nueva en la siguiente ejecución (queda vacío)
                     st.session_state.editor_key += 1
                     st.session_state.show_delete_confirm = False
                     st.session_state.delete_candidate = ""
-
-                    # LIMPIAR selectbox inmediatamente para que no quede seleccionado
-                    st.session_state.select_delete = ""
 
                     # persistencia en GitHub (si está configurada)
                     try:
@@ -218,10 +214,11 @@ with left:
 
             with c2:
                 if st.button("Cancelar"):
+                    # No modificamos la key del widget directamente; sólo cerramos el panel
                     st.session_state.show_delete_confirm = False
                     st.session_state.delete_candidate = ""
-                    # LIMPIAR selectbox para que vuelva a estado vacío
-                    st.session_state.select_delete = ""
+                    # incrementamos editor_key para forzar recreación del selectbox y dejarlo vacío
+                    st.session_state.editor_key += 1
                     st.info("Eliminación cancelada.")
     else:
         st.info("No hay tickers para eliminar.")
