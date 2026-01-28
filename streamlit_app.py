@@ -353,7 +353,11 @@ with left:
 
                 st.success("Eliminación deshecha: ticker restaurado.")
         with c2:
-            st.write(f"Ticker: **{row['ticker']}** — Monto: **{row['amount_ARS']:, .2f} ARS**")
+            try:
+                monto_str = f"{float(row['amount_ARS']):,.2f}"
+            except Exception:
+                monto_str = str(row.get('amount_ARS', 'N/A'))
+            st.write(f"Ticker: **{row['ticker']}** — Monto: **{monto_str} ARS**")
 
     st.markdown("---")
 
