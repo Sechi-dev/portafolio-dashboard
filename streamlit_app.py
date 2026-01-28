@@ -8,7 +8,9 @@ import base64
 import requests
 import os
 import json
+import re
 from datetime import datetime
+from time import sleep
 
 st.set_page_config(layout="wide", page_title="Dashboard de Cartera - Editable (form)")
 
@@ -17,15 +19,18 @@ st.title("Dashboard de Cartera")
 # -------------------------
 # Helpers
 # -------------------------
-@st.cache_data
 def load_portfolio(path="portfolio_raw.csv"):
+    """
+    Lectura directa del CSV local (sin cache) para evitar discrepancias con commits.
+    Si el archivo no existe devuelve DF vacío con las columnas esperadas.
+    """
     try:
         df = pd.read_csv(path)
     except Exception:
-        return pd.DataFrame(columns=['ticker','amount_ARS'])
+        return pd.DataFrame(columns=['ticker', 'amount_ARS'])
     if 'ticker' not in df.columns or 'amount_ARS' not in df.columns:
-        return pd.DataFrame(columns=['ticker','amount_ARS'])
-    df = df[['ticker','amount_ARS']].copy()
+        return pd.DataFrame(columns=['ticker', 'amount_ARS'])
+    df = df[['ticker', 'amount_ARS']].copy()
     df['amount_ARS'] = pd.to_numeric(df['amount_ARS'], errors='coerce').fillna(0)
     df['ticker'] = df['ticker'].astype(str).str.strip().str.upper()
     return df
@@ -35,20 +40,34 @@ def df_to_csv_bytes(df):
     df.to_csv(buf, index=False)
     return buf.getvalue().encode('utf-8')
 
+def sanitize_ticker(t):
+    """
+    Formato básico de validación/sanitización: sólo letras, números, punto y guion.
+    Retorna ticker upper o None si inválido.
+    """
+    if t is None:
+        return None
+    t = str(t).strip().upper()
+    if t == "":
+        return None
+    # permitir letras, números, punto, guion, slash (por si)
+    if not re.match(r'^[A-Z0-9\.\-\/]+$', t):
+        return None
+    return t
+
 # -------------------------
 # GitHub persistence helpers
 # -------------------------
 def get_github_headers():
     token = None
-    # Preferir st.secrets (configurá en Streamlit Cloud)
     try:
         token = st.secrets["GITHUB_PAT"]
     except Exception:
-        # Intentar desde variable de entorno (si prefieres esa opción)
         token = os.getenv("GITHUB_PAT")
     if not token:
         return None
-    return {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+    # usar Bearer por compatibilidad moderna
+    return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
 
 def get_file_sha(repo, path):
     """Devuelve el SHA del archivo si existe, o None."""
@@ -56,15 +75,19 @@ def get_file_sha(repo, path):
     if not headers:
         return None
     url = f"https://api.github.com/repos/{repo}/contents/{path}"
-    r = requests.get(url, headers=headers, timeout=20)
-    if r.status_code == 200:
-        return r.json().get("sha")
+    try:
+        r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code == 200:
+            return r.json().get("sha")
+    except Exception:
+        return None
     return None
 
-def commit_csv_to_github(df, repo=None, path=None, message=None, author_name=None, author_email=None):
+def commit_csv_to_github(df, repo=None, path=None, message=None, author_name=None, author_email=None, max_retries=2):
     """
     Crea o actualiza el archivo 'path' en el repo con el CSV generado desde df.
     Devuelve dict result {ok: bool, status_code: int, message: str}
+    Reintenta un par de veces ante fallos transitorios.
     """
     headers = get_github_headers()
     if not headers:
@@ -77,7 +100,6 @@ def commit_csv_to_github(df, repo=None, path=None, message=None, author_name=Non
 
     csv_bytes = df_to_csv_bytes(df)
     content_b64 = base64.b64encode(csv_bytes).decode("utf-8")
-    sha = get_file_sha(repo, path)
 
     commit_message = message or f"Auto-update portfolio_raw.csv - {datetime.utcnow().isoformat()}Z"
     payload = {
@@ -86,33 +108,112 @@ def commit_csv_to_github(df, repo=None, path=None, message=None, author_name=Non
     }
     # Optional author
     author = {}
-    if author_name := st.secrets.get("GITHUB_COMMIT_NAME", None):
-        author["name"] = author_name
-    if author_email := st.secrets.get("GITHUB_COMMIT_EMAIL", None):
-        author["email"] = author_email
+    if st.secrets.get("GITHUB_COMMIT_NAME", None):
+        author["name"] = st.secrets.get("GITHUB_COMMIT_NAME")
+    if st.secrets.get("GITHUB_COMMIT_EMAIL", None):
+        author["email"] = st.secrets.get("GITHUB_COMMIT_EMAIL")
     if author:
         payload["committer"] = author
 
+    sha = get_file_sha(repo, path)
     if sha:
-        payload["sha"] = sha  # update existing file
+        payload["sha"] = sha
 
     url = f"https://api.github.com/repos/{repo}/contents/{path}"
-    try:
-        r = requests.put(url, headers=headers, data=json.dumps(payload), timeout=20)
-        if r.status_code in (200, 201):
-            return {"ok": True, "message": "File committed", "status_code": r.status_code}
-        else:
-            return {"ok": False, "message": f"GitHub API error: {r.status_code} - {r.text}", "status_code": r.status_code}
-    except Exception as e:
-        return {"ok": False, "message": f"Exception: {e}", "status_code": None}
+
+    attempt = 0
+    while attempt <= max_retries:
+        try:
+            r = requests.put(url, headers=headers, data=json.dumps(payload), timeout=20)
+            if r.status_code in (200, 201):
+                return {"ok": True, "message": "File committed", "status_code": r.status_code}
+            else:
+                # si es un error permanente, devolverlo sin reintentar en ciertas condiciones
+                attempt += 1
+                last_text = r.text
+                last_status = r.status_code
+                # reintentar en 5xx; en 4xx no tiene sentido
+                if 500 <= r.status_code < 600 and attempt <= max_retries:
+                    sleep(1)
+                    continue
+                return {"ok": False, "message": f"GitHub API error: {r.status_code} - {r.text}", "status_code": r.status_code}
+        except Exception as e:
+            attempt += 1
+            last_text = str(e)
+            last_status = None
+            if attempt <= max_retries:
+                sleep(1)
+                continue
+            return {"ok": False, "message": f"Exception: {e}", "status_code": None}
+    # fallback
+    return {"ok": False, "message": f"Failed after {max_retries} attempts: {last_text}", "status_code": last_status}
 
 # -------------------------
-# Inicializar session state
+# Inicializar session state y helpers de limpieza
 # -------------------------
 if 'df' not in st.session_state:
     st.session_state.df = load_portfolio()
 if 'editor_key' not in st.session_state:
     st.session_state.editor_key = 0
+
+# flags de UI
+if 'show_delete_confirm' not in st.session_state:
+    st.session_state.show_delete_confirm = False
+if 'delete_candidate' not in st.session_state:
+    st.session_state.delete_candidate = ""
+if 'last_deleted' not in st.session_state:
+    # last_deleted: dict with { 'row': {'ticker':..., 'amount_ARS':...}, 'timestamp': datetime }
+    st.session_state.last_deleted = None
+if 'last_commit_result' not in st.session_state:
+    st.session_state.last_commit_result = None
+# flags to request resets BEFORE widget creation (avoid setting session_state widget keys after instantiation)
+if 'need_reset_select_delete' not in st.session_state:
+    st.session_state.need_reset_select_delete = False
+if 'need_reset_select_edit' not in st.session_state:
+    st.session_state.need_reset_select_edit = False
+
+def cleanup_session_keys(prefixes):
+    """
+    Borra de st.session_state las keys que comienzan con alguno de los 'prefixes'.
+    Útil para evitar acumulación de keys dinámicas.
+    """
+    to_delete = [k for k in list(st.session_state.keys()) if any(k.startswith(p) for p in prefixes)]
+    for k in to_delete:
+        try:
+            del st.session_state[k]
+        except Exception:
+            pass
+
+def persist_and_local_write(df):
+    """
+    Intentar commit a GitHub (si está configurado) mostrando spinner y reintentos.
+    También escribe el CSV localmente para sincronizar la sesión.
+    Devuelve el resultado del commit (dict) o None si no se intentó.
+    """
+    # siempre escribir local para asegurar consistencia
+    try:
+        df.to_csv("portfolio_raw.csv", index=False)
+    except Exception:
+        pass
+
+    # Si no hay token/repo configurado no intentamos el commit
+    if not get_github_headers():
+        return {"ok": False, "message": "GITHUB_PAT no configurado en secrets.", "status_code": None}
+
+    with st.spinner("Persistiendo cambios en GitHub..."):
+        res = commit_csv_to_github(df)
+    # mostrar resultado
+    if res.get("ok"):
+        st.success("Cambios guardados en GitHub.")
+    else:
+        st.error(f"Error al guardar en GitHub: {res.get('message')}")
+    # guardar para inspección
+    st.session_state.last_commit_result = res
+    return res
+
+# Mensaje inicial si persistencia no configurada
+if not get_github_headers():
+    st.info("Persistencia a GitHub deshabilitada: configurá GITHUB_PAT en Secrets para activar commits automáticos.")
 
 # -------------------------
 # Layout: controles y tabla a la izquierda; KPIs/gráficos a la derecha
@@ -124,13 +225,13 @@ with left:
     # Agregar nuevo ticker
     # -------------------------
     st.subheader("Agregar nuevo ticker")
-    new_ticker = st.text_input("Ticker (sin sufijo)", value="", placeholder="Ej: ABCD", key="add_ticker_input")
+    new_ticker_raw = st.text_input("Ticker (sin sufijo)", value="", placeholder="Ej: ABCD", key="add_ticker_input")
     new_amount = st.number_input("Monto invertido (ARS)", min_value=0.0, value=0.0, step=1000.0, format="%.2f", key="add_amount_input")
     if st.button("Agregar ticker"):
-        t = str(new_ticker).strip().upper()
+        t = sanitize_ticker(new_ticker_raw)
         a = float(new_amount)
-        if t == "" or a <= 0:
-            st.warning("Ingresá ticker y un monto mayor a 0.")
+        if not t or a <= 0:
+            st.warning("Ingresá ticker válido y un monto mayor a 0.")
         else:
             base = st.session_state.df.copy()
             if t in base['ticker'].values:
@@ -141,39 +242,39 @@ with left:
                 base['ticker'] = base['ticker'].astype(str).str.strip().str.upper()
                 base['amount_ARS'] = pd.to_numeric(base['amount_ARS'], errors='coerce').fillna(0)
                 st.session_state.df = base.reset_index(drop=True)
-                # Forzar refresh de widgets dependientes
+
+                # limpiar keys obsoletas que puedan retener valores antiguos
+                cleanup_session_keys(['select_edit_out_', 'edit_amount_input_', 'select_delete_'])
+
+                # Forzar refresh lógico
                 st.session_state.editor_key += 1
-                # Persistir en GitHub (intentar, pero no romper la app si falla)
-                try:
-                    res = commit_csv_to_github(st.session_state.df)
-                    # opcional: guardar resultado en session state para debug
-                    st.session_state.last_commit_result = res
-                except Exception as e:
-                    st.session_state.last_commit_result = {"ok": False, "message": str(e)}
+
+                # persistir local y en GitHub (si está configurado)
+                res = persist_and_local_write(st.session_state.df)
+
                 st.success(f"Ticker {t} agregado con {a:,.2f} ARS.")
 
     st.markdown("---")
+
     # -------------------------
-    # Eliminar Ticker (solo 1) con confirmación explícita (fix final)
+    # Eliminar Ticker (solo 1) con confirmación explícita y undo
     # -------------------------
     st.subheader("Eliminar Tickers")
 
-    # Inicializar flags / estado
-    if "show_delete_confirm" not in st.session_state:
-        st.session_state.show_delete_confirm = False
-    if "delete_candidate" not in st.session_state:
-        st.session_state.delete_candidate = ""
+    # Si se solicitó reset del select desde iteraciones previas, hacerlo ANTES de crear el widget
+    if st.session_state.get('need_reset_select_delete', False):
+        # Resetear valor del widget en session_state antes de instanciar el selectbox
+        st.session_state['select_delete'] = ""
+        st.session_state['need_reset_select_delete'] = False
 
     if len(st.session_state.df) > 0:
         delete_options = st.session_state.df['ticker'].tolist()
-
-        # selectbox con key dinámica basada en editor_key (permite "reset" en la siguiente ejecución)
-        select_key = f"select_delete_{st.session_state.editor_key}"
+        # key estable para evitar problemas; si se quiere forzar recreación se usa need_reset_select_delete
         ticker_to_delete = st.selectbox(
             "Seleccioná un ticker para eliminar (solo 1)",
             options=[""] + delete_options,
             index=0,
-            key=select_key
+            key="select_delete"
         )
 
         if st.button("Eliminar seleccionado"):
@@ -183,63 +284,101 @@ with left:
                 st.session_state.delete_candidate = ticker_to_delete
                 st.session_state.show_delete_confirm = True
 
-        # ----- CONFIRMACIÓN (bloque visible, UX de seguridad) -----
+        # Confirmación visible en la misma columna (no usamos st.modal por compatibilidad)
         if st.session_state.show_delete_confirm:
             candidate = st.session_state.delete_candidate
-
             st.warning(f"⚠️ Estás por eliminar el ticker **{candidate}**.")
-            st.write("Esta acción eliminará la posición del portfolio.")
-
+            st.write("Esta acción eliminará la posición del portfolio. Tenés opción de Deshacer luego de confirmar.")
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("Confirmar eliminación"):
+                    # guardar fila eliminada para posible undo
+                    row = st.session_state.df.loc[st.session_state.df['ticker'] == candidate].iloc[0].to_dict()
+                    st.session_state.last_deleted = {'row': row, 'timestamp': datetime.utcnow().isoformat()}
+
                     base = st.session_state.df.copy()
                     base = base[base['ticker'] != candidate].reset_index(drop=True)
                     st.session_state.df = base
 
-                    # refrescar estado: incrementamos editor_key para forzar que el selectbox
-                    # sea recreado con una key nueva en la siguiente ejecución (queda vacío)
+                    # cleanup keys obsoletas
+                    cleanup_session_keys(['select_edit_out_', 'edit_amount_input_', 'select_delete'])
+
+                    # Forzar refresh lógico
                     st.session_state.editor_key += 1
+
+                    # persistir local y en GitHub (si está configurado)
+                    res = persist_and_local_write(st.session_state.df)
+
+                    # Después de confirmar, pedimos que el select sea reseteado antes de la próxima renderización
+                    st.session_state['need_reset_select_delete'] = True
                     st.session_state.show_delete_confirm = False
                     st.session_state.delete_candidate = ""
 
-                    # persistencia en GitHub (si está configurada)
-                    try:
-                        res = commit_csv_to_github(st.session_state.df)
-                        st.session_state.last_commit_result = res
-                    except Exception as e:
-                        st.session_state.last_commit_result = {"ok": False, "message": str(e)}
-
-                    st.success(f"Ticker {candidate} eliminado correctamente.")
-
+                    st.success(f"Ticker {candidate} eliminado correctamente. Podés deshacer esta acción abajo.")
             with c2:
                 if st.button("Cancelar"):
-                    # No modificamos la key del widget directamente; sólo cerramos el panel
                     st.session_state.show_delete_confirm = False
                     st.session_state.delete_candidate = ""
-                    # incrementamos editor_key para forzar recreación del selectbox y dejarlo vacío
-                    st.session_state.editor_key += 1
+                    # pedir reset del select antes de la próxima renderización para que se vea vacío
+                    st.session_state['need_reset_select_delete'] = True
                     st.info("Eliminación cancelada.")
     else:
         st.info("No hay tickers para eliminar.")
 
+    # Mostrar opción para deshacer la última eliminación (undo)
+    if st.session_state.get('last_deleted', None):
+        st.markdown("---")
+        st.info("Se eliminó recientemente un ticker. Podés restaurarlo si fue un error.")
+        row = st.session_state.last_deleted['row']
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            if st.button("Deshacer última eliminación"):
+                # Reinsertar la fila al inicio (o en el orden deseado)
+                base = st.session_state.df.copy()
+                to_insert = pd.DataFrame([row])
+                base = pd.concat([to_insert, base], ignore_index=True)
+                base['ticker'] = base['ticker'].astype(str).str.strip().str.upper()
+                base['amount_ARS'] = pd.to_numeric(base['amount_ARS'], errors='coerce').fillna(0)
+                st.session_state.df = base.reset_index(drop=True)
+
+                # persistir local y en GitHub
+                res = persist_and_local_write(st.session_state.df)
+
+                # limpiar last_deleted
+                st.session_state.last_deleted = None
+
+                # limpiar keys y forzar refresh
+                cleanup_session_keys(['select_edit_out_', 'edit_amount_input_', 'select_delete'])
+                st.session_state.editor_key += 1
+
+                st.success("Eliminación deshecha: ticker restaurado.")
+        with c2:
+            st.write(f"Ticker: **{row['ticker']}** — Monto: **{row['amount_ARS']:, .2f} ARS**")
+
     st.markdown("---")
+
     # -------------------------
     # SELECTBOX para editar
     # -------------------------
     st.subheader("Editar Ticker")
-    # Construir opciones en cada render para reflejar cambios inmediatos
+
+    # Si se solicitó reset del select edit, hacerlo ANTES de crear el widget
+    if st.session_state.get('need_reset_select_edit', False):
+        st.session_state['selected_edit_ticker'] = ""
+        st.session_state['need_reset_select_edit'] = False
+
     tickers_options = st.session_state.df['ticker'].tolist() if len(st.session_state.df) > 0 else []
     options_for_select = [""] + tickers_options
 
     if 'selected_edit_ticker' not in st.session_state:
         st.session_state.selected_edit_ticker = ""
 
+    # selectbox estable para edición
     st.session_state.selected_edit_ticker = st.selectbox(
         "Seleccioná ticker a editar",
         options=options_for_select,
         index=0,
-        key=f"select_edit_out_{st.session_state.editor_key}"
+        key="select_edit"
     )
 
     # -------------------------
@@ -254,7 +393,8 @@ with left:
         else:
             default_amount = 0.0
 
-        number_key = f"edit_amount_input_{ticker_to_edit if ticker_to_edit != '' else 'none'}_{st.session_state.editor_key}"
+        # number_input key estable pero con editor_key para forzar reseteo si se necesita
+        number_key = f"edit_amount_input_{ticker_to_edit if ticker_to_edit != '' else 'none'}"
         new_amount_for_ticker = st.number_input(
             "Nuevo monto (ARS)",
             min_value=0.0,
@@ -275,24 +415,36 @@ with left:
             base['ticker'] = base['ticker'].astype(str).str.strip().str.upper()
             base['amount_ARS'] = pd.to_numeric(base['amount_ARS'], errors='coerce').fillna(0)
             st.session_state.df = base.reset_index(drop=True)
+
+            # cleanup keys obsoletas
+            cleanup_session_keys(['edit_amount_input_', 'select_edit'])
+
+            # Forzar refresh
             st.session_state.editor_key += 1
-            try:
-                res = commit_csv_to_github(st.session_state.df)
-                st.session_state.last_commit_result = res
-            except Exception as e:
-                st.session_state.last_commit_result = {"ok": False, "message": str(e)}
+
+            # persistir
+            res = persist_and_local_write(st.session_state.df)
+
+            # pedir reset del select edit en próxima renderización para que venga vacío
+            st.session_state['need_reset_select_edit'] = True
             st.session_state.selected_edit_ticker = ""
             st.success(f"Ticker {ticker_to_edit} actualizado a {new_amount_for_ticker:,.2f} ARS.")
-    # st.markdown("---")
+
+    st.markdown("---")
+
     # -------------------------
     # Tabla de Posición (visual)
     # -------------------------
-    # st.subheader("Tabla de Posición")
-    # if len(st.session_state.df) == 0:
-    #     st.info("No hay posiciones cargadas.")
-    # else:
-    #     st.dataframe(st.session_state.df.sort_values('amount_ARS', ascending=False).reset_index(drop=True), use_container_width=True)
-    
+    st.subheader("Tabla de Posición")
+    if len(st.session_state.df) == 0:
+        st.info("No hay posiciones cargadas.")
+    else:
+        df_table = st.session_state.df.copy()
+        df_table = df_table.sort_values('amount_ARS', ascending=False).reset_index(drop=True)
+        df_table_display = df_table.copy()
+        df_table_display['amount_ARS'] = df_table_display['amount_ARS'].map("{:,.2f}".format)
+        st.dataframe(df_table_display, use_container_width=True)
+
     st.markdown("---")
     # Exportar CSV actualizado
     csv_bytes = df_to_csv_bytes(st.session_state.df)
@@ -336,12 +488,10 @@ with right:
         df_weights = pd.DataFrame(columns=['ticker', 'amount_ARS', 'weight_pct'])
         colC.metric("Concentración Top 3 (%)", "N/A")
         colD.metric("Activo dominante (Top 1 %)", "N/A")
-    
+
     # -------------------------
     # Cálculo HHI (Herfindahl–Hirschman Index)
     # -------------------------
-    # df_weights ya tiene column 'weight_pct' en porcentaje (suma 100)
-    # Convertir a fracciones (0..1)
     if not df_weights.empty:
         df_weights['weight_frac'] = df_weights['weight_pct'] / 100.0
         hhi_fraction = (df_weights['weight_frac'] ** 2).sum()  # rango 0..1
@@ -360,29 +510,25 @@ with right:
 
     # Mostrar HHI como KPI adicional (añadimos una fila de métricas compacta)
     try:
-        # Si ya existen 4 columnas arriba, creamos otra fila de columnas para no desordenar
-        colE, colF = st.columns([1,1])
+        colE, colF = st.columns([1, 1])
         colE.metric("HHI (0–1)", f"{hhi_fraction:.4f}")
         colF.metric("HHI (0–10000)", f"{hhi_10000:.0f}")
     except Exception:
-        # Fallback simple
         st.write(f"HHI: {hhi_fraction:.4f} (0–1) — {hhi_10000:.0f} (0–10000)")
 
     st.markdown(f"**Interpretación HHI:** {hhi_label}")
-
     st.markdown("---")
 
     # --- Visual: tabla de pesos (izquierda de la columna derecha) ---
     st.subheader("Distribución y top holdings")
     if not df_weights.empty:
-        # Mostrar tabla con formato
         display_table = df_weights[['ticker', 'amount_ARS', 'weight_pct']].copy()
         display_table['amount_ARS'] = display_table['amount_ARS'].map("{:,.2f}".format)
         display_table['weight_pct'] = display_table['weight_pct'].map("{:.2f}%".format)
         st.dataframe(display_table.reset_index(drop=True), use_container_width=True)
 
         # Resumen top 5 como texto compacto
-        top5_list = df_weights.head(5)[['ticker','weight_pct']].copy()
+        top5_list = df_weights.head(5)[['ticker', 'weight_pct']].copy()
         top5_text = ", ".join([f"{row.ticker} ({row.weight_pct:.2f}%)" for row in top5_list.itertuples()])
         st.markdown(f"**Top 5 (por peso):** {top5_text}")
     else:
