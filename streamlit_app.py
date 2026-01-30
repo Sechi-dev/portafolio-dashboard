@@ -11,6 +11,7 @@ import json
 import re
 from datetime import datetime
 from time import sleep
+import streamlit.components.v1 as components
 
 st.set_page_config(layout="wide", page_title="Dashboard de Cartera - Editable (form)")
 
@@ -215,6 +216,30 @@ def persist_and_local_write(df):
 if not get_github_headers():
     st.info("Persistencia a GitHub deshabilitada: configurá GITHUB_PAT en Secrets para activar commits automáticos.")
 
+def refresh_page():
+    """
+    Intenta forzar un re-render / recarga de la app para que desaparezcan mensajes
+    y widgets obsoletos inmediatamente.
+    - Usa st.experimental_rerun() si está disponible.
+    - Si no, inyecta un pequeño script JS para recargar la página.
+    """
+    try:
+        # Preferible: recarga limpia del script de Streamlit
+        if hasattr(st, "experimental_rerun"):
+            st.experimental_rerun()
+            return
+    except Exception:
+        # seguir al fallback
+        pass
+
+    try:
+        # Fallback: recargar la página del navegador (esto fuerza re-render)
+        components.html("<script>window.location.reload()</script>", height=1)
+    except Exception:
+        # último recurso: no hacer nada (la app seguirá, pero el usuario puede refrescar manualmente)
+        pass
+
+
 # -------------------------
 # Layout: controles y tabla a la izquierda; KPIs/gráficos a la derecha
 # -------------------------
@@ -315,6 +340,13 @@ with left:
                     st.session_state.delete_candidate = ""
 
                     st.success(f"Ticker {candidate} eliminado correctamente. Podés deshacer esta acción abajo.")
+
+                    # --- LIMPIEZA FINAL: eliminar keys obsoletas y forzar recarga inmediata ---
+                    cleanup_session_keys(['select_edit_out_', 'edit_amount_input_', 'select_delete'])
+                    # pequeña pausa opcional para darle tiempo al mensaje de success en la UI
+                    # luego forzamos refresh para que el DOM se limpie inmediatamente
+                    refresh_page()
+
             with c2:
                 if st.button("Cancelar"):
                     st.session_state.show_delete_confirm = False
@@ -322,6 +354,11 @@ with left:
                     # pedir reset del select antes de la próxima renderización para que se vea vacío
                     st.session_state['need_reset_select_delete'] = True
                     st.info("Eliminación cancelada.")
+
+                    # limpiar keys y forzar refresh para que desaparezca el panel de confirmación inmediatamente
+                    cleanup_session_keys(['select_edit_out_', 'edit_amount_input_', 'select_delete'])
+                    refresh_page()
+
     else:
         st.info("No hay tickers para eliminar.")
 
