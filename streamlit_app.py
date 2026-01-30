@@ -156,6 +156,8 @@ if 'df' not in st.session_state:
     st.session_state.df = load_portfolio()
 if 'editor_key' not in st.session_state:
     st.session_state.editor_key = 0
+if 'delete_event_consumed' not in st.session_state:
+    st.session_state.delete_event_consumed = False
 
 # flags de UI
 if 'show_delete_confirm' not in st.session_state:
@@ -310,7 +312,7 @@ with left:
                 st.session_state.show_delete_confirm = True
 
         # Confirmación visible en la misma columna (no usamos st.modal por compatibilidad)
-        if st.session_state.show_delete_confirm:
+        if st.session_state.show_delete_confirm and not st.session_state.delete_event_consumed:
             candidate = st.session_state.delete_candidate
             st.warning(f"⚠️ Estás por eliminar el ticker **{candidate}**.")
             st.write("Esta acción eliminará la posición del portfolio.")
@@ -320,7 +322,7 @@ with left:
                     # guardar fila eliminada para posible undo
                     row = st.session_state.df.loc[st.session_state.df['ticker'] == candidate].iloc[0].to_dict()
                     st.session_state.last_deleted = {'row': row, 'timestamp': datetime.utcnow().isoformat()}
-
+                    
                     base = st.session_state.df.copy()
                     base = base[base['ticker'] != candidate].reset_index(drop=True)
                     st.session_state.df = base
@@ -336,8 +338,11 @@ with left:
 
                     # Después de confirmar, pedimos que el select sea reseteado antes de la próxima renderización
                     st.session_state['need_reset_select_delete'] = True
-                    st.session_state.show_delete_confirm = False
-                    st.session_state.delete_candidate = ""
+                    st.session_state.show_delete_confirm = True
+                    st.session_state.delete_candidate = ticker_to_delete
+                    st.session_state.need_reset_select_delete = True
+                    st.session_state.delete_event_consumed = False
+                    
 
                     st.success(f"Ticker {candidate} eliminado correctamente.")
 
@@ -351,6 +356,8 @@ with left:
                 if st.button("Cancelar"):
                     st.session_state.show_delete_confirm = False
                     st.session_state.delete_candidate = ""
+                    st.session_state.need_reset_select_delete = True
+                    st.session_state.delete_event_consumed = True
                     # pedir reset del select antes de la próxima renderización para que se vea vacío
                     st.session_state['need_reset_select_delete'] = True
                     st.info("Eliminación cancelada.")
