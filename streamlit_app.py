@@ -389,6 +389,16 @@ with left:
                 st.session_state.editor_key += 1
 
                 st.success("Eliminación deshecha: ticker restaurado.")
+                # Después de confirmar, pedimos que el select sea reseteado antes de la próxima renderización
+                st.session_state['need_reset_select_delete'] = True
+                st.session_state.show_delete_confirm = False
+                st.session_state.delete_candidate = ""
+                # --- LIMPIEZA FINAL: eliminar keys obsoletas y forzar recarga inmediata ---
+                cleanup_session_keys(['select_edit_out_', 'edit_amount_input_', 'select_delete'])
+                # pequeña pausa opcional para darle tiempo al mensaje de success en la UI
+                # luego forzamos refresh para que el DOM se limpie inmediatamente
+                refresh_page()
+                
         with c2:
             try:
                 monto_str = f"{float(row['amount_ARS']):,.2f}"
