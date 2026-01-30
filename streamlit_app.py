@@ -313,7 +313,7 @@ with left:
         if st.session_state.show_delete_confirm:
             candidate = st.session_state.delete_candidate
             st.warning(f"⚠️ Estás por eliminar el ticker **{candidate}**.")
-            st.write("Esta acción eliminará la posición del portfolio. Tenés opción de Deshacer luego de confirmar.")
+            st.write("Esta acción eliminará la posición del portfolio.")
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("Confirmar eliminación"):
@@ -339,7 +339,7 @@ with left:
                     st.session_state.show_delete_confirm = False
                     st.session_state.delete_candidate = ""
 
-                    st.success(f"Ticker {candidate} eliminado correctamente. Podés deshacer esta acción abajo.")
+                    st.success(f"Ticker {candidate} eliminado correctamente.")
 
                     # --- LIMPIEZA FINAL: eliminar keys obsoletas y forzar recarga inmediata ---
                     cleanup_session_keys(['select_edit_out_', 'edit_amount_input_', 'select_delete'])
@@ -362,51 +362,7 @@ with left:
     else:
         st.info("No hay tickers para eliminar.")
 
-    # Mostrar opción para deshacer la última eliminación (undo)
-    if st.session_state.get('last_deleted', None):
         st.markdown("---")
-        st.info("Se eliminó recientemente un ticker. Podés restaurarlo si fue un error.")
-        row = st.session_state.last_deleted['row']
-        c1, c2 = st.columns([1, 3])
-        with c1:
-            if st.button("Deshacer última eliminación"):
-                # Reinsertar la fila al inicio (o en el orden deseado)
-                base = st.session_state.df.copy()
-                to_insert = pd.DataFrame([row])
-                base = pd.concat([to_insert, base], ignore_index=True)
-                base['ticker'] = base['ticker'].astype(str).str.strip().str.upper()
-                base['amount_ARS'] = pd.to_numeric(base['amount_ARS'], errors='coerce').fillna(0)
-                st.session_state.df = base.reset_index(drop=True)
-
-                # persistir local y en GitHub
-                res = persist_and_local_write(st.session_state.df)
-
-                # limpiar last_deleted
-                st.session_state.last_deleted = None
-
-                # limpiar keys y forzar refresh
-                cleanup_session_keys(['select_edit_out_', 'edit_amount_input_', 'select_delete'])
-                st.session_state.editor_key += 1
-
-                st.success("Eliminación deshecha: ticker restaurado.")
-                # Después de confirmar, pedimos que el select sea reseteado antes de la próxima renderización
-                st.session_state['need_reset_select_delete'] = True
-                st.session_state.show_delete_confirm = False
-                st.session_state.delete_candidate = ""
-                # --- LIMPIEZA FINAL: eliminar keys obsoletas y forzar recarga inmediata ---
-                cleanup_session_keys(['select_edit_out_', 'edit_amount_input_', 'select_delete'])
-                # pequeña pausa opcional para darle tiempo al mensaje de success en la UI
-                # luego forzamos refresh para que el DOM se limpie inmediatamente
-                refresh_page()
-                
-        with c2:
-            try:
-                monto_str = f"{float(row['amount_ARS']):,.2f}"
-            except Exception:
-                monto_str = str(row.get('amount_ARS', 'N/A'))
-            st.write(f"Ticker: **{row['ticker']}** — Monto: **{monto_str} ARS**")
-
-    st.markdown("---")
 
     # -------------------------
     # SELECTBOX para editar
